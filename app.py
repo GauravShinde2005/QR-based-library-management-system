@@ -1,4 +1,4 @@
-from flask import Flask, request, redirect, session, render_template_string, flash, get_flashed_messages
+from flask import Flask, request, redirect, session, render_template_string, flash
 import sqlite3
 import qrcode
 import os
@@ -6,10 +6,11 @@ from datetime import datetime, timedelta
 from functools import wraps
 
 app = Flask(__name__)
-app.secret_key = "qr_library_2026"
+app.secret_key = "qr-library-secret-2026"
 
-DB = "library.db"
+DATABASE = "library.db"
 QR_FOLDER = "static/qr"
+
 os.makedirs(QR_FOLDER, exist_ok=True)
 
 
@@ -18,38 +19,39 @@ os.makedirs(QR_FOLDER, exist_ok=True)
 # =========================================================
 
 def get_db():
-    con = sqlite3.connect(DB)
-    con.row_factory = sqlite3.Row
-    return con
+    db = sqlite3.connect(DATABASE)
+    db.row_factory = sqlite3.Row
+    return db
 
 
 def init_db():
-    con = get_db()
-    cur = con.cursor()
+
+    db = get_db()
+    cur = db.cursor()
 
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS admin(
+        CREATE TABLE IF NOT EXISTS admin (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE,
-            password TEXT
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL
         )
     """)
 
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS books(
+        CREATE TABLE IF NOT EXISTS books (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             title TEXT NOT NULL,
             author TEXT NOT NULL,
             category TEXT,
             isbn TEXT,
-            quantity INTEGER DEFAULT 1,
-            available INTEGER DEFAULT 1,
+            quantity INTEGER NOT NULL,
+            available INTEGER NOT NULL,
             qr_code TEXT
         )
     """)
 
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS students(
+        CREATE TABLE IF NOT EXISTS students (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             roll_no TEXT UNIQUE NOT NULL,
@@ -59,1027 +61,1646 @@ def init_db():
     """)
 
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS transactions(
+        CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            book_id INTEGER,
-            student_id INTEGER,
-            issue_date TEXT,
-            due_date TEXT,
+            book_id INTEGER NOT NULL,
+            student_id INTEGER NOT NULL,
+            issue_date TEXT NOT NULL,
+            due_date TEXT NOT NULL,
             return_date TEXT,
-            status TEXT
+            status TEXT NOT NULL
         )
     """)
 
-    if not cur.execute(
-        "SELECT id FROM admin WHERE username=?",
+    admin = cur.execute(
+        "SELECT * FROM admin WHERE username = ?",
         ("admin",)
-    ).fetchone():
+    ).fetchone()
+
+    if admin is None:
         cur.execute(
             "INSERT INTO admin(username,password) VALUES(?,?)",
             ("admin", "admin123")
         )
 
-    con.commit()
-    con.close()
+    db.commit()
+    db.close()
 
+
+# =========================================================
+# LOGIN
+# =========================================================
 
 def login_required(func):
+
     @wraps(func)
     def wrapper(*args, **kwargs):
+
         if "admin" not in session:
             return redirect("/")
+
         return func(*args, **kwargs)
+
     return wrapper
 
 
 # =========================================================
-# ADVANCED CSS
+# MAIN HTML
 # =========================================================
 
-CSS = r"""
+HTML = """
+
+<!DOCTYPE html>
+
+<html>
+
+<head>
+
+<meta charset="UTF-8">
+
+<meta name="viewport"
+      content="width=device-width, initial-scale=1.0">
+
+<title>QR Library Management System</title>
+
+
 <style>
 
-*{
-    margin:0;
-    padding:0;
-    box-sizing:border-box;
+/* =====================================================
+   RESET
+   ===================================================== */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
 }
 
-body{
-    font-family:Arial,Helvetica,sans-serif;
-    background:#f4f7fb;
-    color:#172033;
-    overflow-x:hidden;
+html {
+    scroll-behavior: smooth;
 }
 
-/* Animated background */
-body::before,
-body::after{
-    content:"";
-    position:fixed;
-    width:450px;
-    height:450px;
-    border-radius:50%;
-    filter:blur(110px);
-    opacity:.13;
-    z-index:-5;
-}
+body {
 
-body::before{
-    background:#2563eb;
-    top:-180px;
-    left:-150px;
-    animation:blob1 8s ease-in-out infinite alternate;
-}
+    font-family:
+    Arial,
+    Helvetica,
+    sans-serif;
 
-body::after{
-    background:#7c3aed;
-    right:-160px;
-    bottom:-180px;
-    animation:blob2 9s ease-in-out infinite alternate;
-}
-
-@keyframes blob1{
-    to{
-        transform:translate(130px,100px) scale(1.3);
-    }
-}
-
-@keyframes blob2{
-    to{
-        transform:translate(-120px,-100px) scale(1.25);
-    }
-}
-
-
-/* =========================================================
-   SIDEBAR
-   ========================================================= */
-
-.sidebar{
-    position:fixed;
-    left:0;
-    top:0;
-    width:250px;
-    height:100vh;
-    padding:20px 15px;
-    color:white;
     background:
-        linear-gradient(
-            160deg,
-            #020617,
-            #172554,
-            #111827
-        );
-    box-shadow:10px 0 35px rgba(0,0,0,.12);
-    z-index:1000;
-    animation:sidebarIn .7s ease;
+    linear-gradient(
+        135deg,
+        #f8fafc,
+        #eef4ff
+    );
+
+    color: #111827;
+
+    min-height: 100vh;
 }
 
-@keyframes sidebarIn{
-    from{
-        transform:translateX(-100%);
-        opacity:0;
+
+/* =====================================================
+   ANIMATIONS
+   ===================================================== */
+
+@keyframes fadeUp {
+
+    from {
+        opacity: 0;
+        transform: translateY(25px);
     }
-    to{
-        transform:translateX(0);
-        opacity:1;
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
     }
 }
 
-.logo{
-    font-size:23px;
-    font-weight:bold;
-    padding:12px 10px 28px;
+
+@keyframes fadeLeft {
+
+    from {
+        opacity: 0;
+        transform: translateX(-30px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
 }
 
-.logo span{
-    color:#60a5fa;
+
+@keyframes zoomIn {
+
+    from {
+        opacity: 0;
+        transform: scale(.88);
+    }
+
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
 }
 
-.menu-title{
-    color:#64748b;
-    font-size:10px;
-    font-weight:bold;
-    letter-spacing:1.5px;
-    margin:20px 10px 8px;
+
+@keyframes floating {
+
+    0%,100% {
+        transform: translateY(0);
+    }
+
+    50% {
+        transform: translateY(-8px);
+    }
 }
 
-.sidebar a{
-    display:flex;
-    align-items:center;
-    gap:10px;
-    color:#cbd5e1;
-    text-decoration:none;
-    padding:12px 14px;
-    margin:5px 0;
-    border-radius:10px;
-    transition:.3s;
+
+@keyframes pulse {
+
+    0% {
+        box-shadow:
+        0 0 0 0
+        rgba(59,130,246,.4);
+    }
+
+    70% {
+        box-shadow:
+        0 0 0 14px
+        rgba(59,130,246,0);
+    }
+
+    100% {
+        box-shadow:
+        0 0 0 0
+        rgba(59,130,246,0);
+    }
 }
 
-.sidebar a:hover{
-    color:white;
-    background:linear-gradient(
+
+@keyframes gradientMove {
+
+    0% {
+        background-position: 0% 50%;
+    }
+
+    50% {
+        background-position: 100% 50%;
+    }
+
+    100% {
+        background-position: 0% 50%;
+    }
+}
+
+
+.fade {
+    animation:
+    fadeUp .6s ease both;
+}
+
+
+/* =====================================================
+   SIDEBAR
+   ===================================================== */
+
+.sidebar {
+
+    position: fixed;
+
+    top: 0;
+    left: 0;
+
+    width: 250px;
+
+    height: 100vh;
+
+    background:
+    linear-gradient(
+        180deg,
+        #0f172a,
+        #172554
+    );
+
+    color: white;
+
+    padding: 22px 15px;
+
+    z-index: 100;
+
+    box-shadow:
+    8px 0 30px
+    rgba(0,0,0,.12);
+
+    animation:
+    fadeLeft .7s ease both;
+
+    overflow-y: auto;
+}
+
+
+.logo {
+
+    font-size: 22px;
+
+    font-weight: 800;
+
+    padding: 12px;
+
+    margin-bottom: 28px;
+
+    letter-spacing: -.5px;
+}
+
+
+.logo span {
+    color: #60a5fa;
+}
+
+
+.menu-title {
+
+    font-size: 10px;
+
+    font-weight: bold;
+
+    letter-spacing: 1.5px;
+
+    color: #94a3b8;
+
+    margin:
+    22px 10px 8px;
+}
+
+
+.sidebar a {
+
+    display: flex;
+
+    align-items: center;
+
+    gap: 10px;
+
+    color: #cbd5e1;
+
+    text-decoration: none;
+
+    padding: 12px 13px;
+
+    margin: 5px 0;
+
+    border-radius: 9px;
+
+    font-size: 14px;
+
+    transition:
+    all .25s ease;
+}
+
+
+.sidebar a:hover {
+
+    color: white;
+
+    background:
+    linear-gradient(
         90deg,
         #2563eb,
-        #4f46e5
+        #3b82f6
     );
-    transform:translateX(7px);
-    box-shadow:0 8px 25px rgba(37,99,235,.35);
+
+    transform:
+    translateX(6px);
+
+    box-shadow:
+    0 8px 20px
+    rgba(37,99,235,.25);
 }
 
 
-/* =========================================================
+/* =====================================================
    MAIN
-   ========================================================= */
+   ===================================================== */
 
-.main{
-    margin-left:250px;
-    min-height:100vh;
-}
+.main {
 
-.topbar{
-    height:72px;
-    padding:0 30px;
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    background:rgba(255,255,255,.82);
-    backdrop-filter:blur(18px);
-    border-bottom:1px solid #e5e7eb;
-    position:sticky;
-    top:0;
-    z-index:500;
-    animation:topIn .6s ease;
-}
+    margin-left: 250px;
 
-@keyframes topIn{
-    from{
-        opacity:0;
-        transform:translateY(-30px);
-    }
-    to{
-        opacity:1;
-        transform:none;
-    }
-}
-
-.admin{
-    background:#eff6ff;
-    color:#2563eb;
-    padding:9px 16px;
-    border-radius:50px;
-    font-weight:bold;
-}
-
-.content{
-    padding:32px;
-    animation:contentIn .6s ease;
-}
-
-@keyframes contentIn{
-    from{
-        opacity:0;
-        transform:translateY(20px);
-    }
-    to{
-        opacity:1;
-        transform:none;
-    }
-}
-
-.page-title{
-    margin-bottom:25px;
-}
-
-.page-title h1{
-    font-size:30px;
-}
-
-.page-title p{
-    color:#64748b;
-    margin-top:7px;
+    min-height: 100vh;
 }
 
 
-/* =========================================================
+/* =====================================================
+   TOP BAR
+   ===================================================== */
+
+.topbar {
+
+    height: 72px;
+
+    display: flex;
+
+    justify-content:
+    space-between;
+
+    align-items: center;
+
+    padding:
+    0 32px;
+
+    background:
+    rgba(255,255,255,.92);
+
+    backdrop-filter:
+    blur(15px);
+
+    border-bottom:
+    1px solid #e5e7eb;
+
+    position:
+    sticky;
+
+    top: 0;
+
+    z-index: 50;
+}
+
+
+.topbar h2 {
+
+    font-size: 20px;
+}
+
+
+.profile {
+
+    padding:
+    9px 16px;
+
+    border-radius:
+    30px;
+
+    background:
+    #eff6ff;
+
+    color:
+    #2563eb;
+
+    font-weight:
+    bold;
+
+    font-size:
+    13px;
+
+    animation:
+    pulse 2.5s infinite;
+}
+
+
+/* =====================================================
+   CONTENT
+   ===================================================== */
+
+.content {
+
+    padding:
+    32px;
+
+    animation:
+    fadeUp .6s ease both;
+}
+
+
+.page-title {
+
+    margin-bottom:
+    25px;
+}
+
+
+.page-title h1 {
+
+    font-size:
+    29px;
+
+    font-weight:
+    800;
+}
+
+
+.page-title p {
+
+    color:
+    #64748b;
+
+    margin-top:
+    7px;
+
+    font-size:
+    14px;
+}
+
+
+/* =====================================================
    DASHBOARD CARDS
-   ========================================================= */
+   ===================================================== */
 
-.cards{
-    display:grid;
-    grid-template-columns:repeat(4,1fr);
-    gap:20px;
+.cards {
+
+    display:
+    grid;
+
+    grid-template-columns:
+    repeat(4,1fr);
+
+    gap:
+    20px;
 }
 
-.card{
-    background:rgba(255,255,255,.94);
-    border:1px solid #e5e7eb;
-    border-radius:18px;
-    padding:22px;
-    box-shadow:0 12px 35px rgba(15,23,42,.07);
-    animation:cardIn .7s ease backwards;
-    transition:.35s;
+
+.card {
+
+    background:
+    rgba(255,255,255,.96);
+
+    border:
+    1px solid #e5e7eb;
+
+    padding:
+    23px;
+
+    border-radius:
+    15px;
+
+    position:
+    relative;
+
+    overflow:
+    hidden;
+
+    transition:
+    all .3s ease;
+
+    animation:
+    zoomIn .55s ease both;
 }
 
-.card:nth-child(1){animation-delay:.1s}
-.card:nth-child(2){animation-delay:.2s}
-.card:nth-child(3){animation-delay:.3s}
-.card:nth-child(4){animation-delay:.4s}
 
-.card:hover{
-    transform:translateY(-8px) scale(1.02);
-    box-shadow:0 22px 45px rgba(37,99,235,.18);
+.card:nth-child(1) {
+    animation-delay: .05s;
 }
 
-@keyframes cardIn{
-    from{
-        opacity:0;
-        transform:translateY(30px) scale(.9);
-    }
-    to{
-        opacity:1;
-        transform:none;
-    }
+.card:nth-child(2) {
+    animation-delay: .12s;
 }
 
-.card-icon{
-    width:52px;
-    height:52px;
-    display:flex;
-    align-items:center;
-    justify-content:center;
-    border-radius:14px;
-    background:linear-gradient(
-        135deg,
-        #eff6ff,
-        #eef2ff
+.card:nth-child(3) {
+    animation-delay: .19s;
+}
+
+.card:nth-child(4) {
+    animation-delay: .26s;
+}
+
+
+.card::before {
+
+    content: "";
+
+    position:
+    absolute;
+
+    left: 0;
+    top: 0;
+
+    width: 100%;
+    height: 3px;
+
+    background:
+    linear-gradient(
+        90deg,
+        #2563eb,
+        #60a5fa
     );
-    font-size:25px;
+
+    transform:
+    scaleX(0);
+
+    transform-origin:
+    left;
+
+    transition:
+    transform .35s ease;
 }
 
-.card h2{
-    margin-top:15px;
-    font-size:32px;
+
+.card:hover {
+
+    transform:
+    translateY(-8px);
+
+    box-shadow:
+    0 18px 40px
+    rgba(37,99,235,.13);
+
+    border-color:
+    #bfdbfe;
 }
 
-.card p{
-    color:#64748b;
-    margin-top:5px;
+
+.card:hover::before {
+    transform: scaleX(1);
 }
 
 
-/* =========================================================
+.card-icon {
+
+    font-size:
+    30px;
+
+    animation:
+    floating 3s ease-in-out infinite;
+}
+
+
+.card h2 {
+
+    font-size:
+    31px;
+
+    margin-top:
+    12px;
+}
+
+
+.card p {
+
+    color:
+    #64748b;
+
+    margin-top:
+    5px;
+}
+
+
+/* =====================================================
    QUICK ACTIONS
-   ========================================================= */
+   ===================================================== */
 
-.actions{
-    display:grid;
-    grid-template-columns:repeat(4,1fr);
-    gap:16px;
-    margin:25px 0;
-}
+.actions {
 
-.action{
-    background:white;
-    padding:20px;
-    border-radius:15px;
-    border:1px solid #e5e7eb;
-    text-decoration:none;
-    color:#172033;
-    transition:.3s;
-    animation:contentIn .7s;
-}
+    display:
+    grid;
 
-.action:hover{
-    transform:translateY(-7px);
-    border-color:#93c5fd;
-    box-shadow:0 15px 35px rgba(37,99,235,.15);
-}
+    grid-template-columns:
+    repeat(4,1fr);
 
-.action-icon{
-    font-size:30px;
-    margin-bottom:12px;
-    transition:.3s;
-}
+    gap:
+    15px;
 
-.action:hover .action-icon{
-    transform:scale(1.25) rotate(-6deg);
-}
-
-.action small{
-    display:block;
-    color:#64748b;
-    margin-top:5px;
+    margin-top:
+    25px;
 }
 
 
-/* =========================================================
+.action {
+
+    background:
+    white;
+
+    border:
+    1px solid #e5e7eb;
+
+    padding:
+    20px;
+
+    border-radius:
+    13px;
+
+    color:
+    #111827;
+
+    text-decoration:
+    none;
+
+    transition:
+    all .3s ease;
+}
+
+
+.action:hover {
+
+    transform:
+    translateY(-6px);
+
+    border-color:
+    #93c5fd;
+
+    box-shadow:
+    0 15px 30px
+    rgba(37,99,235,.1);
+}
+
+
+.action-icon {
+
+    font-size:
+    29px;
+
+    margin-bottom:
+    8px;
+
+    transition:
+    transform .3s ease;
+}
+
+
+.action:hover .action-icon {
+
+    transform:
+    scale(1.2)
+    rotate(-5deg);
+}
+
+
+.action b {
+    display: block;
+    margin-bottom: 5px;
+}
+
+
+.action small {
+    color: #64748b;
+}
+
+
+/* =====================================================
    TABLE
-   ========================================================= */
+   ===================================================== */
 
-.table-box{
-    background:rgba(255,255,255,.95);
-    padding:22px;
-    border-radius:17px;
-    box-shadow:0 10px 35px rgba(15,23,42,.07);
-    overflow-x:auto;
-    animation:contentIn .7s;
-}
+.table-box {
 
-table{
-    width:100%;
-    border-collapse:separate;
-    border-spacing:0 7px;
-}
+    background:
+    rgba(255,255,255,.97);
 
-th{
-    text-align:left;
-    padding:12px;
-    font-size:12px;
-    color:#64748b;
-    text-transform:uppercase;
-}
+    border:
+    1px solid #e5e7eb;
 
-td{
-    padding:13px;
-    background:white;
-    border-top:1px solid #f1f5f9;
-    border-bottom:1px solid #f1f5f9;
-    transition:.25s;
-}
+    border-radius:
+    15px;
 
-tbody tr{
-    animation:rowIn .5s ease backwards;
-}
+    padding:
+    22px;
 
-tbody tr:nth-child(1){animation-delay:.05s}
-tbody tr:nth-child(2){animation-delay:.10s}
-tbody tr:nth-child(3){animation-delay:.15s}
-tbody tr:nth-child(4){animation-delay:.20s}
-tbody tr:nth-child(5){animation-delay:.25s}
-tbody tr:nth-child(6){animation-delay:.30s}
+    overflow-x:
+    auto;
 
-tbody tr:hover td{
-    background:#f8fbff;
-}
+    box-shadow:
+    0 8px 25px
+    rgba(15,23,42,.04);
 
-@keyframes rowIn{
-    from{
-        opacity:0;
-        transform:translateX(-20px);
-    }
-    to{
-        opacity:1;
-        transform:none;
-    }
+    animation:
+    fadeUp .6s ease both;
 }
 
 
-/* =========================================================
+table {
+
+    width:
+    100%;
+
+    border-collapse:
+    collapse;
+}
+
+
+th {
+
+    text-align:
+    left;
+
+    padding:
+    14px;
+
+    background:
+    #f8fafc;
+
+    color:
+    #475569;
+
+    font-size:
+    12px;
+
+    text-transform:
+    uppercase;
+}
+
+
+td {
+
+    padding:
+    14px;
+
+    border-top:
+    1px solid #edf2f7;
+
+    font-size:
+    13px;
+}
+
+
+tr {
+
+    transition:
+    all .2s ease;
+}
+
+
+tr:hover td {
+
+    background:
+    #f8fbff;
+}
+
+
+/* =====================================================
    BUTTONS
-   ========================================================= */
+   ===================================================== */
 
-.btn{
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    gap:6px;
-    padding:10px 15px;
-    border:0;
-    border-radius:9px;
-    text-decoration:none;
-    cursor:pointer;
-    font-weight:bold;
-    position:relative;
-    overflow:hidden;
-    transition:.2s;
+.btn {
+
+    display:
+    inline-flex;
+
+    align-items:
+    center;
+
+    justify-content:
+    center;
+
+    gap:
+    5px;
+
+    padding:
+    10px 15px;
+
+    border:
+    none;
+
+    border-radius:
+    8px;
+
+    text-decoration:
+    none;
+
+    cursor:
+    pointer;
+
+    font-size:
+    13px;
+
+    font-weight:
+    700;
+
+    transition:
+    all .25s ease;
 }
 
-.btn:hover{
-    transform:translateY(-2px);
-    box-shadow:0 8px 20px rgba(0,0,0,.12);
+
+.btn:hover {
+
+    transform:
+    translateY(-2px);
+
+    box-shadow:
+    0 8px 18px
+    rgba(0,0,0,.12);
 }
 
-.btn:active{
-    transform:scale(.95);
-}
 
-.primary{
-    color:white;
-    background:linear-gradient(
+.primary {
+
+    color:
+    white;
+
+    background:
+    linear-gradient(
         135deg,
         #2563eb,
-        #4f46e5
+        #3b82f6
     );
 }
 
-.dark{
-    color:white;
-    background:#111827;
-}
 
-.success{
-    color:#15803d;
-    background:#dcfce7;
-}
+.primary:hover {
 
-.danger{
-    color:#dc2626;
-    background:#fee2e2;
+    background:
+    linear-gradient(
+        135deg,
+        #1d4ed8,
+        #2563eb
+    );
 }
 
 
-/* =========================================================
-   FORM
-   ========================================================= */
+.dark {
 
-.form-box{
-    max-width:700px;
-    background:rgba(255,255,255,.96);
-    padding:28px;
-    border-radius:18px;
-    box-shadow:0 15px 40px rgba(15,23,42,.08);
-    animation:formIn .6s ease;
+    background:
+    #111827;
+
+    color:
+    white;
 }
 
-@keyframes formIn{
-    from{
-        opacity:0;
-        transform:translateY(25px) scale(.97);
-    }
-    to{
-        opacity:1;
-        transform:none;
-    }
+
+.success {
+
+    background:
+    #dcfce7;
+
+    color:
+    #15803d;
 }
 
-.form-group{
-    margin-bottom:18px;
+
+.danger {
+
+    background:
+    #fee2e2;
+
+    color:
+    #dc2626;
 }
 
-label{
-    display:block;
-    font-weight:bold;
-    font-size:13px;
-    margin-bottom:7px;
+
+/* =====================================================
+   FORMS
+   ===================================================== */
+
+.form-box {
+
+    max-width:
+    680px;
+
+    background:
+    rgba(255,255,255,.97);
+
+    padding:
+    28px;
+
+    border:
+    1px solid #e5e7eb;
+
+    border-radius:
+    15px;
+
+    box-shadow:
+    0 12px 35px
+    rgba(15,23,42,.06);
+
+    animation:
+    zoomIn .55s ease both;
 }
+
+
+.form-group {
+
+    margin-bottom:
+    19px;
+}
+
+
+label {
+
+    display:
+    block;
+
+    margin-bottom:
+    7px;
+
+    font-weight:
+    700;
+
+    font-size:
+    13px;
+}
+
 
 input,
-select{
-    width:100%;
-    padding:13px;
-    border:1px solid #dbe2ea;
-    border-radius:9px;
-    font-size:14px;
-    transition:.25s;
+select {
+
+    width:
+    100%;
+
+    padding:
+    12px 13px;
+
+    border:
+    1px solid #d1d5db;
+
+    border-radius:
+    8px;
+
+    font-size:
+    14px;
+
+    transition:
+    all .2s ease;
 }
+
 
 input:focus,
-select:focus{
-    outline:none;
-    border-color:#2563eb;
-    box-shadow:0 0 0 4px rgba(37,99,235,.1);
-    transform:translateY(-1px);
+select:focus {
+
+    outline:
+    none;
+
+    border-color:
+    #3b82f6;
+
+    box-shadow:
+    0 0 0 4px
+    rgba(59,130,246,.1);
+
+    transform:
+    translateY(-1px);
 }
 
 
-/* =========================================================
+/* =====================================================
+   SEARCH
+   ===================================================== */
+
+.search-bar {
+
+    display:
+    flex;
+
+    gap:
+    10px;
+
+    margin-bottom:
+    20px;
+}
+
+
+.search-bar input {
+
+    max-width:
+    450px;
+}
+
+
+/* =====================================================
    QR
-   ========================================================= */
+   ===================================================== */
 
-.qr-image{
-    width:75px;
-    height:75px;
-    padding:5px;
-    background:white;
-    border-radius:10px;
-    transition:.4s;
-}
+.qr {
 
-.qr-image:hover{
-    transform:scale(1.25) rotate(3deg);
-    box-shadow:0 15px 35px rgba(37,99,235,.2);
-}
+    width:
+    78px;
 
+    height:
+    78px;
 
-/* =========================================================
-   QR SCANNER
-   ========================================================= */
+    padding:
+    4px;
 
-.scanner-box{
-    max-width:700px;
-    background:white;
-    padding:25px;
-    border-radius:20px;
-    box-shadow:0 20px 50px rgba(15,23,42,.08);
-    animation:scannerIn .7s;
-}
-
-@keyframes scannerIn{
-    from{
-        opacity:0;
-        transform:scale(.9);
-    }
-    to{
-        opacity:1;
-        transform:scale(1);
-    }
-}
-
-.qr-frame{
-    position:relative;
-    border-radius:15px;
-    padding:10px;
-    overflow:hidden;
-    background:#020617;
-}
-
-.qr-frame::after{
-    content:"";
-    position:absolute;
-    left:8%;
-    width:84%;
-    height:3px;
-    background:linear-gradient(
-        90deg,
-        transparent,
-        #22c55e,
-        transparent
-    );
-    box-shadow:0 0 15px #22c55e;
-    animation:scanLine 2s infinite;
-    z-index:10;
-}
-
-@keyframes scanLine{
-    0%{top:8%}
-    50%{top:90%}
-    100%{top:8%}
-}
-
-.corner{
-    position:absolute;
-    width:35px;
-    height:35px;
-    border-color:#22c55e;
-    z-index:20;
-}
-
-.c1{
-    top:18px;
-    left:18px;
-    border-top:4px solid;
-    border-left:4px solid;
-}
-
-.c2{
-    top:18px;
-    right:18px;
-    border-top:4px solid;
-    border-right:4px solid;
-}
-
-.c3{
-    bottom:18px;
-    left:18px;
-    border-bottom:4px solid;
-    border-left:4px solid;
-}
-
-.c4{
-    bottom:18px;
-    right:18px;
-    border-bottom:4px solid;
-    border-right:4px solid;
-}
-
-
-/* =========================================================
-   LOGIN
-   ========================================================= */
-
-.login-page{
-    min-height:100vh;
-    display:flex;
-    justify-content:center;
-    align-items:center;
     background:
-        radial-gradient(
-            circle at 20% 20%,
-            #2563eb,
-            transparent 30%
-        ),
-        radial-gradient(
-            circle at 80% 80%,
-            #7c3aed,
-            transparent 30%
-        ),
-        #020617;
-    overflow:hidden;
+    white;
+
+    border:
+    1px solid #e5e7eb;
+
+    border-radius:
+    8px;
+
+    transition:
+    all .3s ease;
 }
 
-.login-box{
-    width:420px;
-    padding:40px;
-    border-radius:22px;
-    background:rgba(255,255,255,.96);
-    box-shadow:0 30px 80px rgba(0,0,0,.4);
-    animation:loginIn .8s cubic-bezier(.2,.8,.2,1);
+
+.qr:hover {
+
+    transform:
+    scale(1.15)
+    rotate(2deg);
+
+    box-shadow:
+    0 10px 25px
+    rgba(0,0,0,.15);
 }
 
-@keyframes loginIn{
-    from{
-        opacity:0;
-        transform:translateY(60px) scale(.85) rotateX(10deg);
-    }
-    to{
-        opacity:1;
-        transform:none;
-    }
+
+/* =====================================================
+   ALERT
+   ===================================================== */
+
+.alert {
+
+    margin:
+    18px 32px 0;
+
+    padding:
+    13px 18px;
+
+    border-radius:
+    9px;
+
+    background:
+    #dcfce7;
+
+    color:
+    #166534;
+
+    border:
+    1px solid #bbf7d0;
+
+    animation:
+    fadeUp .5s ease both;
 }
 
-.login-logo{
-    text-align:center;
-    font-size:30px;
-    font-weight:800;
-    margin-bottom:8px;
+
+/* =====================================================
+   LOGIN PAGE
+   ===================================================== */
+
+.login-page {
+
+    min-height:
+    100vh;
+
+    display:
+    flex;
+
+    align-items:
+    center;
+
+    justify-content:
+    center;
+
+    padding:
+    20px;
+
+    position:
+    relative;
+
+    overflow:
+    hidden;
+
+    background:
+
+    linear-gradient(
+        rgba(5,15,30,.68),
+        rgba(5,15,30,.72)
+    ),
+
+    url("https://images.unsplash.com/photo-1521587760476-6c12a4b040da?auto=format&fit=crop&w=2000&q=85");
+
+    background-size:
+    cover;
+
+    background-position:
+    center;
+
+    animation:
+    gradientMove 12s ease infinite;
 }
 
-.login-logo span{
-    color:#2563eb;
+
+/* moving light */
+
+.login-page::before {
+
+    content:
+    "";
+
+    position:
+    absolute;
+
+    width:
+    350px;
+
+    height:
+    350px;
+
+    border-radius:
+    50%;
+
+    background:
+    rgba(59,130,246,.15);
+
+    top:
+    -100px;
+
+    left:
+    -100px;
+
+    filter:
+    blur(5px);
+
+    animation:
+    floating 5s ease-in-out infinite;
 }
 
-.login-subtitle{
-    text-align:center;
-    color:#64748b;
-    margin-bottom:28px;
+
+.login-page::after {
+
+    content:
+    "";
+
+    position:
+    absolute;
+
+    width:
+    280px;
+
+    height:
+    280px;
+
+    border-radius:
+    50%;
+
+    background:
+    rgba(96,165,250,.13);
+
+    bottom:
+    -80px;
+
+    right:
+    -80px;
+
+    filter:
+    blur(5px);
+
+    animation:
+    floating 6s ease-in-out infinite;
 }
 
-.login-button{
-    width:100%;
-    padding:14px;
-    border:0;
-    border-radius:10px;
-    color:white;
-    font-size:15px;
-    font-weight:bold;
-    cursor:pointer;
-    background:linear-gradient(
+
+/* =====================================================
+   LOGIN BOX
+   ===================================================== */
+
+.login-box {
+
+    width:
+    420px;
+
+    max-width:
+    100%;
+
+    padding:
+    40px;
+
+    background:
+    rgba(255,255,255,.96);
+
+    border:
+    1px solid
+    rgba(255,255,255,.7);
+
+    border-radius:
+    20px;
+
+    box-shadow:
+    0 30px 90px
+    rgba(0,0,0,.35);
+
+    position:
+    relative;
+
+    z-index:
+    2;
+
+    animation:
+    zoomIn .8s ease both;
+}
+
+
+.login-logo {
+
+    text-align:
+    center;
+
+    font-size:
+    29px;
+
+    font-weight:
+    850;
+
+    margin-bottom:
+    10px;
+}
+
+
+.login-logo span {
+    color:
+    #2563eb;
+}
+
+
+.login-subtitle {
+
+    text-align:
+    center;
+
+    color:
+    #64748b;
+
+    font-size:
+    13px;
+
+    margin-bottom:
+    28px;
+}
+
+
+.login-box button {
+
+    width:
+    100%;
+
+    padding:
+    13px;
+
+    border:
+    none;
+
+    border-radius:
+    9px;
+
+    color:
+    white;
+
+    background:
+    linear-gradient(
         135deg,
         #2563eb,
-        #4f46e5
+        #3b82f6
     );
-    transition:.3s;
+
+    font-size:
+    15px;
+
+    font-weight:
+    700;
+
+    cursor:
+    pointer;
+
+    transition:
+    all .3s ease;
 }
 
-.login-button:hover{
-    transform:translateY(-3px);
-    box-shadow:0 12px 30px rgba(37,99,235,.4);
+
+.login-box button:hover {
+
+    transform:
+    translateY(-3px);
+
+    box-shadow:
+    0 12px 25px
+    rgba(37,99,235,.3);
 }
 
 
-/* =========================================================
-   ALERT
-   ========================================================= */
+.login-info {
 
-.alert{
-    position:fixed;
-    top:85px;
-    right:25px;
-    background:#dcfce7;
-    color:#166534;
-    padding:14px 20px;
-    border-radius:10px;
-    z-index:5000;
-    box-shadow:0 15px 35px rgba(0,0,0,.15);
+    text-align:
+    center;
+
+    color:
+    #64748b;
+
+    font-size:
+    12px;
+
+    line-height:
+    1.7;
+
+    margin-top:
+    20px;
+}
+
+
+/* =====================================================
+   SCANNER
+   ===================================================== */
+
+.scanner {
+
+    max-width:
+    680px;
+
+    padding:
+    28px;
+
+    background:
+    white;
+
+    border:
+    1px solid #e5e7eb;
+
+    border-radius:
+    15px;
+
+    box-shadow:
+    0 12px 35px
+    rgba(0,0,0,.06);
+
     animation:
-        alertIn .5s,
-        alertOut .5s 3.5s forwards;
-}
-
-@keyframes alertIn{
-    from{
-        opacity:0;
-        transform:translateX(120%);
-    }
-    to{
-        opacity:1;
-        transform:none;
-    }
-}
-
-@keyframes alertOut{
-    to{
-        opacity:0;
-        transform:translateX(120%);
-    }
+    zoomIn .55s ease both;
 }
 
 
-/* =========================================================
-   MOBILE / SMALL SCREEN
-   ========================================================= */
+#reader {
 
-@media(max-width:1100px){
-    .cards{
-        grid-template-columns:repeat(2,1fr);
-    }
+    width:
+    100%;
 
-    .actions{
-        grid-template-columns:repeat(2,1fr);
-    }
+    margin-top:
+    20px;
+
+    border-radius:
+    12px;
+
+    overflow:
+    hidden;
 }
 
-@media(max-width:700px){
-    .sidebar{
-        position:relative;
-        width:100%;
-        height:auto;
+
+/* =====================================================
+   BOOK DETAILS
+   ===================================================== */
+
+.book-card {
+
+    max-width:
+    680px;
+
+    padding:
+    30px;
+
+    background:
+    white;
+
+    border:
+    1px solid #e5e7eb;
+
+    border-radius:
+    15px;
+
+    box-shadow:
+    0 12px 35px
+    rgba(0,0,0,.05);
+
+    animation:
+    zoomIn .55s ease both;
+}
+
+
+.book-card h2 {
+
+    font-size:
+    25px;
+
+    margin-bottom:
+    20px;
+}
+
+
+.book-row {
+
+    padding:
+    14px 0;
+
+    border-bottom:
+    1px solid #edf2f7;
+
+    font-size:
+    14px;
+}
+
+
+/* =====================================================
+   MOBILE
+   ===================================================== */
+
+@media(max-width:1100px) {
+
+    .cards {
+
+        grid-template-columns:
+        repeat(2,1fr);
     }
 
-    .main{
-        margin-left:0;
+    .actions {
+
+        grid-template-columns:
+        repeat(2,1fr);
+    }
+
+}
+
+
+@media(max-width:700px) {
+
+    .sidebar {
+
+        position:
+        relative;
+
+        width:
+        100%;
+
+        height:
+        auto;
+    }
+
+    .main {
+
+        margin-left:
+        0;
     }
 
     .cards,
-    .actions{
-        grid-template-columns:1fr;
+    .actions {
+
+        grid-template-columns:
+        1fr;
     }
 
-    .content{
-        padding:18px;
+    .content {
+
+        padding:
+        18px;
     }
 
-    .login-box{
-        width:90%;
+    .topbar {
+
+        padding:
+        0 18px;
     }
+
+    .topbar h2 {
+
+        font-size:
+        17px;
+    }
+
+    .alert {
+
+        margin:
+        15px 18px 0;
+    }
+
+    .search-bar {
+
+        flex-direction:
+        column;
+    }
+
+    .search-bar input {
+
+        max-width:
+        100%;
+    }
+
+    .login-box {
+
+        padding:
+        30px 22px;
+    }
+
 }
 
 </style>
-"""
+
+</head>
 
 
-# =========================================================
-# JAVASCRIPT ANIMATIONS
-# =========================================================
-
-JS = r"""
-<script>
-
-/* Floating particles */
-for(let i=0;i<20;i++){
-
-    const p=document.createElement("div");
-
-    p.style.position="fixed";
-    p.style.left=(Math.random()*100)+"%";
-    p.style.bottom="-15px";
-
-    const size=3+Math.random()*4;
-
-    p.style.width=size+"px";
-    p.style.height=size+"px";
-    p.style.borderRadius="50%";
-    p.style.background="#2563eb";
-    p.style.opacity=".15";
-    p.style.pointerEvents="none";
-    p.style.zIndex="-1";
-
-    p.style.animation=
-        "floatParticle "+
-        (8+Math.random()*10)+
-        "s linear "+
-        (Math.random()*5)+
-        "s infinite";
-
-    document.body.appendChild(p);
-}
+<body>
 
 
-/* Count-up animation */
-document.querySelectorAll(".counter").forEach(function(el){
+{% if session.get("admin") %}
 
-    const target=Number(el.dataset.target || 0);
-    const start=performance.now();
-    const duration=1000;
+<div class="sidebar">
 
-    function animate(now){
-
-        const progress=Math.min(
-            (now-start)/duration,
-            1
-        );
-
-        el.textContent=
-            Math.floor(progress*target);
-
-        if(progress<1){
-            requestAnimationFrame(animate);
-        }
-    }
-
-    requestAnimationFrame(animate);
-});
-
-
-/* Button ripple effect */
-document.querySelectorAll(".btn").forEach(function(button){
-
-    button.addEventListener("click",function(e){
-
-        const ripple=document.createElement("span");
-
-        ripple.style.position="absolute";
-        ripple.style.width="10px";
-        ripple.style.height="10px";
-        ripple.style.borderRadius="50%";
-        ripple.style.background="rgba(255,255,255,.4)";
-        ripple.style.left=e.offsetX+"px";
-        ripple.style.top=e.offsetY+"px";
-        ripple.style.transform="translate(-50%,-50%)";
-        ripple.style.pointerEvents="none";
-        ripple.style.animation="ripple .6s ease";
-
-        button.appendChild(ripple);
-
-        setTimeout(function(){
-            ripple.remove();
-        },600);
-
-    });
-
-});
-
-</script>
-
-<style>
-
-@keyframes floatParticle{
-    to{
-        transform:
-            translateY(-110vh)
-            translateX(80px);
-        opacity:0;
-    }
-}
-
-@keyframes ripple{
-    to{
-        transform:
-            translate(-50%,-50%)
-            scale(25);
-        opacity:0;
-    }
-}
-
-</style>
-"""
-
-
-# =========================================================
-# PAGE TEMPLATE
-# =========================================================
-
-def page(content):
-
-    messages = get_flashed_messages()
-
-    alerts = ""
-
-    for message in messages:
-        alerts += f"""
-        <div class="alert">
-            ✅ {message}
-        </div>
-        """
-
-    if "admin" not in session:
-        return render_template_string(
-            CSS + content + JS
-        )
-
-    html = f"""
-
-    <div class="sidebar">
-
-        <div class="logo">
-            📚 <span>QR</span> Library
-        </div>
-
-        <div class="menu-title">
-            MAIN MENU
-        </div>
-
-        <a href="/dashboard">
-            🏠 Dashboard
-        </a>
-
-        <a href="/books">
-            📚 Books
-        </a>
-
-        <a href="/students">
-            👨‍🎓 Students
-        </a>
-
-        <div class="menu-title">
-            QR LIBRARY
-        </div>
-
-        <a href="/issue">
-            📖 Issue Book
-        </a>
-
-        <a href="/returns">
-            ↩️ Return Book
-        </a>
-
-        <a href="/scan">
-            📷 QR Scanner
-        </a>
-
-        <a href="/history">
-            📋 History
-        </a>
-
-        <div class="menu-title">
-            ACCOUNT
-        </div>
-
-        <a href="/logout">
-            🚪 Logout
-        </a>
-
+    <div class="logo">
+        📚 <span>QR</span> Library
     </div>
 
 
-    <div class="main">
-
-        <div class="topbar">
-
-            <div>
-                <b>QR Library Management System</b>
-            </div>
-
-            <div class="admin">
-                👤 Admin
-            </div>
-
-        </div>
-
-        {alerts}
-
-        <div class="content">
-            {content}
-        </div>
-
+    <div class="menu-title">
+        MAIN MENU
     </div>
 
-    """
+    <a href="/dashboard">
+        🏠 Dashboard
+    </a>
+
+    <a href="/books">
+        📚 Books
+    </a>
+
+    <a href="/students">
+        👨‍🎓 Students
+    </a>
+
+
+    <div class="menu-title">
+        LIBRARY
+    </div>
+
+    <a href="/issue">
+        📖 Issue Book
+    </a>
+
+    <a href="/returns">
+        ↩️ Return Book
+    </a>
+
+    <a href="/scan">
+        📷 Scan QR
+    </a>
+
+    <a href="/history">
+        📋 History
+    </a>
+
+
+    <div class="menu-title">
+        ACCOUNT
+    </div>
+
+    <a href="/logout">
+        🚪 Logout
+    </a>
+
+</div>
+
+
+<div class="main">
+
+<div class="topbar">
+
+    <h2>
+        QR Library Management
+    </h2>
+
+    <div class="profile">
+        👤 Admin
+    </div>
+
+</div>
+
+{% endif %}
+
+
+{% with messages = get_flashed_messages() %}
+
+{% for message in messages %}
+
+<div class="alert">
+    ✅ {{ message }}
+</div>
+
+{% endfor %}
+
+{% endwith %}
+
+
+{% if session.get("admin") %}
+
+<div class="content">
+
+{{ content|safe }}
+
+</div>
+
+</div>
+
+{% else %}
+
+{{ content|safe }}
+
+{% endif %}
+
+
+</body>
+
+</html>
+"""
+
+
+def render_page(content):
 
     return render_template_string(
-        CSS + html + JS
+        HTML,
+        content=content
     )
 
 
@@ -1090,24 +1711,21 @@ def page(content):
 @app.route("/", methods=["GET", "POST"])
 def login():
 
-    error = ""
-
     if request.method == "POST":
 
-        username = request.form.get("username")
-        password = request.form.get("password")
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
 
-        con = get_db()
+        db = get_db()
 
-        user = con.execute(
-            """
-            SELECT * FROM admin
-            WHERE username=? AND password=?
-            """,
-            (username, password)
-        ).fetchone()
+        user = db.execute("""
+            SELECT *
+            FROM admin
+            WHERE username=?
+            AND password=?
+        """, (username, password)).fetchone()
 
-        con.close()
+        db.close()
 
         if user:
 
@@ -1115,17 +1733,88 @@ def login():
 
             return redirect("/dashboard")
 
-        error = """
-        <p style="
-            color:#dc2626;
-            text-align:center;
-            margin-bottom:15px;
-        ">
-            ❌ Invalid username or password
-        </p>
-        """
+        return render_page("""
 
-    content = f"""
+        <div class="login-page">
+
+            <div class="login-box">
+
+                <div class="login-logo">
+                    📚 <span>QR Library</span>
+                </div>
+
+                <div class="login-subtitle">
+                    Library Management System
+                </div>
+
+                <p style="
+                    text-align:center;
+                    color:#dc2626;
+                    margin-bottom:18px;
+                    font-size:13px;
+                ">
+                    ❌ Invalid username or password
+                </p>
+
+
+                <form method="POST">
+
+                    <div class="form-group">
+
+                        <label>
+                            Username
+                        </label>
+
+                        <input
+                            name="username"
+                            placeholder="Enter username"
+                            required>
+
+                    </div>
+
+
+                    <div class="form-group">
+
+                        <label>
+                            Password
+                        </label>
+
+                        <input
+                            type="password"
+                            name="password"
+                            placeholder="Enter password"
+                            required>
+
+                    </div>
+
+
+                    <button type="submit">
+                        Login →
+                    </button>
+
+                </form>
+
+
+                <div class="login-info">
+
+                    Default Login<br>
+
+                    Username:
+                    <b>admin</b><br>
+
+                    Password:
+                    <b>admin123</b>
+
+                </div>
+
+            </div>
+
+        </div>
+
+        """)
+
+
+    return render_page("""
 
     <div class="login-page">
 
@@ -1136,10 +1825,9 @@ def login():
             </div>
 
             <div class="login-subtitle">
-                Smart Library Management System
+                Modern Library Management System
             </div>
 
-            {error}
 
             <form method="POST">
 
@@ -1152,10 +1840,10 @@ def login():
                     <input
                         name="username"
                         placeholder="Enter username"
-                        required
-                    >
+                        required>
 
                 </div>
+
 
                 <div class="form-group">
 
@@ -1167,30 +1855,24 @@ def login():
                         type="password"
                         name="password"
                         placeholder="Enter password"
-                        required
-                    >
+                        required>
 
                 </div>
 
-                <button class="login-button">
-                    🔐 Login
+
+                <button type="submit">
+                    Login →
                 </button>
 
             </form>
 
-            <div style="
-                text-align:center;
-                color:#64748b;
-                font-size:12px;
-                margin-top:20px;
-            ">
 
-                Demo Login<br><br>
+            <div class="login-info">
+
+                Default Login<br>
 
                 Username:
-                <b>admin</b>
-
-                <br>
+                <b>admin</b><br>
 
                 Password:
                 <b>admin123</b>
@@ -1201,10 +1883,12 @@ def login():
 
     </div>
 
-    """
+    """)
 
-    return page(content)
 
+# =========================================================
+# LOGOUT
+# =========================================================
 
 @app.route("/logout")
 def logout():
@@ -1222,77 +1906,87 @@ def logout():
 @login_required
 def dashboard():
 
-    con = get_db()
+    db = get_db()
 
-    books = con.execute(
+    total_books = db.execute(
         "SELECT COUNT(*) FROM books"
     ).fetchone()[0]
 
-    students = con.execute(
+    total_students = db.execute(
         "SELECT COUNT(*) FROM students"
     ).fetchone()[0]
 
-    issued = con.execute(
-        """
-        SELECT COUNT(*)
-        FROM transactions
-        WHERE status='Issued'
-        """
+    issued = db.execute(
+        "SELECT COUNT(*) FROM transactions WHERE status='Issued'"
     ).fetchone()[0]
 
-    returned = con.execute(
-        """
-        SELECT COUNT(*)
-        FROM transactions
-        WHERE status='Returned'
-        """
+    returned = db.execute(
+        "SELECT COUNT(*) FROM transactions WHERE status='Returned'"
     ).fetchone()[0]
 
-    recent = con.execute(
-        """
-        SELECT t.*,b.title,s.name
-        FROM transactions t
-        JOIN books b ON t.book_id=b.id
-        JOIN students s ON t.student_id=s.id
-        ORDER BY t.id DESC
-        LIMIT 6
-        """
-    ).fetchall()
 
-    con.close()
+    recent = db.execute("""
+        SELECT
+            transactions.*,
+            books.title,
+            students.name
+
+        FROM transactions
+
+        JOIN books
+        ON transactions.book_id = books.id
+
+        JOIN students
+        ON transactions.student_id = students.id
+
+        ORDER BY transactions.id DESC
+
+        LIMIT 5
+
+    """).fetchall()
+
+    db.close()
+
 
     rows = ""
 
-    for r in recent:
+    for item in recent:
 
-        if r["status"] == "Returned":
+        if item["status"] == "Returned":
+
             status = """
-            <span class="btn success">
-                ✓ Returned
-            </span>
+                <span class="btn success">
+                    Returned
+                </span>
             """
+
         else:
+
             status = """
-            <span class="btn"
-            style="background:#dbeafe;color:#1d4ed8">
-                ● Issued
-            </span>
+                <span class="btn"
+                style="
+                    background:#dbeafe;
+                    color:#1d4ed8;
+                ">
+                    Issued
+                </span>
             """
+
 
         rows += f"""
 
         <tr>
 
             <td>
-                <b>{r["title"]}</b>
+                <b>{item["title"]}</b>
             </td>
 
             <td>
-                {r["name"]}
+                {item["name"]}
             </td>
 
             <td>
-                {r["issue_date"]}
+                {item["issue_date"]}
             </td>
 
             <td>
@@ -1303,6 +1997,7 @@ def dashboard():
 
         """
 
+
     content = f"""
 
     <div class="page-title">
@@ -1312,7 +2007,8 @@ def dashboard():
         </h1>
 
         <p>
-            Welcome back, Admin 👋
+            Welcome back, Admin!
+            Here's your library overview.
         </p>
 
     </div>
@@ -1320,16 +2016,15 @@ def dashboard():
 
     <div class="cards">
 
+
         <div class="card">
 
             <div class="card-icon">
                 📚
             </div>
 
-            <h2
-                class="counter"
-                data-target="{books}">
-                0
+            <h2>
+                {total_books}
             </h2>
 
             <p>
@@ -1345,10 +2040,8 @@ def dashboard():
                 👨‍🎓
             </div>
 
-            <h2
-                class="counter"
-                data-target="{students}">
-                0
+            <h2>
+                {total_students}
             </h2>
 
             <p>
@@ -1364,10 +2057,8 @@ def dashboard():
                 📖
             </div>
 
-            <h2
-                class="counter"
-                data-target="{issued}">
-                0
+            <h2>
+                {issued}
             </h2>
 
             <p>
@@ -1383,10 +2074,8 @@ def dashboard():
                 ↩️
             </div>
 
-            <h2
-                class="counter"
-                data-target="{returned}">
-                0
+            <h2>
+                {returned}
             </h2>
 
             <p>
@@ -1400,6 +2089,7 @@ def dashboard():
 
     <div class="actions">
 
+
         <a
             class="action"
             href="/books/add">
@@ -1409,11 +2099,30 @@ def dashboard():
             </div>
 
             <b>
-                Add Book
+                Add New Book
             </b>
 
             <small>
-                Generate QR code
+                Add book and generate QR
+            </small>
+
+        </a>
+
+
+        <a
+            class="action"
+            href="/students/add">
+
+            <div class="action-icon">
+                👨‍🎓
+            </div>
+
+            <b>
+                Add Student
+            </b>
+
+            <small>
+                Register library student
             </small>
 
         </a>
@@ -1432,26 +2141,7 @@ def dashboard():
             </b>
 
             <small>
-                Issue to student
-            </small>
-
-        </a>
-
-
-        <a
-            class="action"
-            href="/returns">
-
-            <div class="action-icon">
-                ↩️
-            </div>
-
-            <b>
-                Return Book
-            </b>
-
-            <small>
-                Process returns
+                Issue a book
             </small>
 
         </a>
@@ -1470,12 +2160,16 @@ def dashboard():
             </b>
 
             <small>
-                Scan book instantly
+                Scan book QR code
             </small>
 
         </a>
 
+
     </div>
+
+
+    <br>
 
 
     <div class="table-box">
@@ -1484,22 +2178,30 @@ def dashboard():
             Recent Transactions
         </h2>
 
+
         <table>
 
-            <thead>
+            <tr>
 
-                <tr>
-                    <th>Book</th>
-                    <th>Student</th>
-                    <th>Issue Date</th>
-                    <th>Status</th>
-                </tr>
+                <th>
+                    Book
+                </th>
 
-            </thead>
+                <th>
+                    Student
+                </th>
 
-            <tbody>
-                {rows}
-            </tbody>
+                <th>
+                    Issue Date
+                </th>
+
+                <th>
+                    Status
+                </th>
+
+            </tr>
+
+            {rows}
 
         </table>
 
@@ -1507,7 +2209,7 @@ def dashboard():
 
     """
 
-    return page(content)
+    return render_page(content)
 
 
 # =========================================================
@@ -1516,89 +2218,87 @@ def dashboard():
 
 @app.route("/books")
 @login_required
-def books_page():
+def books():
 
-    search = request.args.get("search", "")
+    search = request.args.get(
+        "search",
+        ""
+    )
 
-    con = get_db()
+    db = get_db()
 
     if search:
 
-        pattern = f"%{search}%"
+        data = db.execute("""
+            SELECT *
+            FROM books
 
-        books = con.execute(
-            """
-            SELECT * FROM books
             WHERE title LIKE ?
             OR author LIKE ?
             OR category LIKE ?
             OR isbn LIKE ?
+
             ORDER BY id DESC
-            """,
-            (pattern, pattern, pattern, pattern)
-        ).fetchall()
+
+        """, (
+            f"%{search}%",
+            f"%{search}%",
+            f"%{search}%",
+            f"%{search}%"
+        )).fetchall()
 
     else:
 
-        books = con.execute(
-            "SELECT * FROM books ORDER BY id DESC"
-        ).fetchall()
+        data = db.execute("""
+            SELECT *
+            FROM books
+            ORDER BY id DESC
+        """).fetchall()
 
-    con.close()
+    db.close()
+
 
     rows = ""
 
-    for b in books:
+    for book in data:
 
         rows += f"""
 
         <tr>
 
             <td>
-                #{b["id"]}
+                #{book["id"]}
             </td>
 
             <td>
 
                 <img
-                    class="qr-image"
-                    src="/static/qr/{b["qr_code"]}"
-                >
+                    class="qr"
+                    src="/static/qr/{book["qr_code"]}">
 
             </td>
 
             <td>
-
-                <a
-                    href="/book/{b["id"]}"
-                    style="
-                        color:#2563eb;
-                        text-decoration:none;
-                    ">
-
-                    <b>
-                        {b["title"]}
-                    </b>
-
-                </a>
-
+                <b>
+                    {book["title"]}
+                </b>
             </td>
 
             <td>
-                {b["author"]}
+                {book["author"]}
             </td>
 
             <td>
-                {b["category"] or "-"}
+                {book["category"] or "-"}
             </td>
 
             <td>
-                {b["quantity"]}
+                {book["quantity"]}
             </td>
 
             <td>
                 <b style="color:#15803d">
-                    {b["available"]}
+                    {book["available"]}
                 </b>
             </td>
 
@@ -1606,12 +2306,12 @@ def books_page():
 
                 <a
                     class="btn danger"
-                    href="/books/delete/{b["id"]}"
+                    href="/books/delete/{book["id"]}"
                     onclick="
-                        return confirm('Delete this book?')
+                    return confirm('Delete this book?')
                     ">
 
-                    🗑 Delete
+                    Delete
 
                 </a>
 
@@ -1620,6 +2320,7 @@ def books_page():
         </tr>
 
         """
+
 
     content = f"""
 
@@ -1630,7 +2331,7 @@ def books_page():
         </h1>
 
         <p>
-            Every book has a unique QR code.
+            Manage books and generated QR codes.
         </p>
 
     </div>
@@ -1649,21 +2350,19 @@ def books_page():
 
 
     <form
-        method="GET"
-        style="
-            display:flex;
-            gap:10px;
-            margin-bottom:20px;
-        ">
+        class="search-bar"
+        method="GET">
 
         <input
             name="search"
             value="{search}"
-            placeholder="🔍 Search books..."
-        >
+            placeholder="Search books...">
 
-        <button class="btn dark">
-            Search
+        <button
+            class="btn dark">
+
+            🔍 Search
+
         </button>
 
     </form>
@@ -1673,24 +2372,20 @@ def books_page():
 
         <table>
 
-            <thead>
+            <tr>
 
-                <tr>
-                    <th>ID</th>
-                    <th>QR</th>
-                    <th>Book</th>
-                    <th>Author</th>
-                    <th>Category</th>
-                    <th>Total</th>
-                    <th>Available</th>
-                    <th>Action</th>
-                </tr>
+                <th>ID</th>
+                <th>QR</th>
+                <th>Book</th>
+                <th>Author</th>
+                <th>Category</th>
+                <th>Total</th>
+                <th>Available</th>
+                <th>Action</th>
 
-            </thead>
+            </tr>
 
-            <tbody>
-                {rows}
-            </tbody>
+            {rows}
 
         </table>
 
@@ -1698,14 +2393,17 @@ def books_page():
 
     """
 
-    return page(content)
+    return render_page(content)
 
 
 # =========================================================
-# ADD BOOK + GENERATE QR
+# ADD BOOK
 # =========================================================
 
-@app.route("/books/add", methods=["GET", "POST"])
+@app.route(
+    "/books/add",
+    methods=["GET", "POST"]
+)
 @login_required
 def add_book():
 
@@ -1713,76 +2411,87 @@ def add_book():
 
         title = request.form["title"]
         author = request.form["author"]
-        category = request.form.get("category", "")
-        isbn = request.form.get("isbn", "")
-        quantity = int(request.form["quantity"])
+        category = request.form["category"]
+        isbn = request.form["isbn"]
 
-        con = get_db()
-        cur = con.cursor()
+        quantity = int(
+            request.form["quantity"]
+        )
 
-        cur.execute(
-            """
+
+        db = get_db()
+
+        cur = db.cursor()
+
+
+        cur.execute("""
             INSERT INTO books
-            (title,author,category,isbn,quantity,available)
-            VALUES(?,?,?,?,?,?)
-            """,
             (
                 title,
                 author,
                 category,
                 isbn,
                 quantity,
-                quantity
+                available
             )
-        )
+
+            VALUES(?,?,?,?,?,?)
+
+        """, (
+            title,
+            author,
+            category,
+            isbn,
+            quantity,
+            quantity
+        ))
+
 
         book_id = cur.lastrowid
 
-        # QR contains the local book URL
-        qr_url = (
+
+        # QR contains local book URL
+        qr_data = (
             f"http://127.0.0.1:5000/book/{book_id}"
         )
 
-        qr = qrcode.QRCode(
-            version=1,
-            box_size=10,
-            border=4
+
+        qr = qrcode.make(qr_data)
+
+
+        filename = (
+            f"book_{book_id}.png"
         )
 
-        qr.add_data(qr_url)
-        qr.make(fit=True)
 
-        img = qr.make_image(
-            fill_color="black",
-            back_color="white"
-        )
-
-        filename = f"book_{book_id}.png"
-
-        img.save(
+        qr.save(
             os.path.join(
                 QR_FOLDER,
                 filename
             )
         )
 
-        cur.execute(
-            """
+
+        cur.execute("""
             UPDATE books
             SET qr_code=?
             WHERE id=?
-            """,
-            (filename, book_id)
-        )
+        """, (
+            filename,
+            book_id
+        ))
 
-        con.commit()
-        con.close()
+
+        db.commit()
+        db.close()
+
 
         flash(
-            "Book added and QR code generated!"
+            "Book added and QR generated successfully!"
         )
 
         return redirect("/books")
+
 
     content = """
 
@@ -1793,8 +2502,7 @@ def add_book():
         </h1>
 
         <p>
-            A unique QR code will be
-            generated automatically.
+            Enter book details and generate QR automatically.
         </p>
 
     </div>
@@ -1803,6 +2511,7 @@ def add_book():
     <div class="form-box">
 
         <form method="POST">
+
 
             <div class="form-group">
 
@@ -1813,8 +2522,7 @@ def add_book():
                 <input
                     name="title"
                     placeholder="Enter book title"
-                    required
-                >
+                    required>
 
             </div>
 
@@ -1827,9 +2535,8 @@ def add_book():
 
                 <input
                     name="author"
-                    placeholder="Enter author"
-                    required
-                >
+                    placeholder="Enter author name"
+                    required>
 
             </div>
 
@@ -1842,8 +2549,7 @@ def add_book():
 
                 <input
                     name="category"
-                    placeholder="Programming / Science / etc."
-                >
+                    placeholder="Programming / Science / Novel">
 
             </div>
 
@@ -1856,8 +2562,7 @@ def add_book():
 
                 <input
                     name="isbn"
-                    placeholder="Enter ISBN"
-                >
+                    placeholder="Enter ISBN">
 
             </div>
 
@@ -1871,17 +2576,17 @@ def add_book():
                 <input
                     type="number"
                     name="quantity"
-                    min="1"
                     value="1"
-                    required
-                >
+                    min="1"
+                    required>
 
             </div>
 
 
-            <button class="btn primary">
+            <button
+                class="btn primary">
 
-                📚 Add Book + Generate QR
+                📚 Add Book & Generate QR
 
             </button>
 
@@ -1900,46 +2605,55 @@ def add_book():
 
     """
 
-    return page(content)
+    return render_page(content)
 
 
 # =========================================================
 # DELETE BOOK
 # =========================================================
 
-@app.route("/books/delete/<int:id>")
+@app.route(
+    "/books/delete/<int:id>"
+)
 @login_required
 def delete_book(id):
 
-    con = get_db()
+    db = get_db()
 
-    book = con.execute(
+    book = db.execute(
         "SELECT * FROM books WHERE id=?",
         (id,)
     ).fetchone()
+
 
     if book:
 
         if book["qr_code"]:
 
-            path = os.path.join(
+            qr_path = os.path.join(
                 QR_FOLDER,
                 book["qr_code"]
             )
 
-            if os.path.exists(path):
-                os.remove(path)
+            if os.path.exists(qr_path):
 
-        con.execute(
+                os.remove(qr_path)
+
+
+        db.execute(
             "DELETE FROM books WHERE id=?",
             (id,)
         )
 
-        con.commit()
+        db.commit()
 
-    con.close()
 
-    flash("Book deleted!")
+    db.close()
+
+
+    flash(
+        "Book deleted successfully!"
+    )
 
     return redirect("/books")
 
@@ -1952,45 +2666,51 @@ def delete_book(id):
 @login_required
 def students():
 
-    con = get_db()
+    db = get_db()
 
-    data = con.execute(
-        "SELECT * FROM students ORDER BY id DESC"
-    ).fetchall()
+    data = db.execute("""
+        SELECT *
+        FROM students
+        ORDER BY id DESC
+    """).fetchall()
 
-    con.close()
+    db.close()
+
 
     rows = ""
 
-    for s in data:
+    for student in data:
 
         rows += f"""
 
         <tr>
 
             <td>
-                #{s["id"]}
+                #{student["id"]}
             </td>
 
             <td>
-                <b>{s["name"]}</b>
+                <b>
+                    {student["name"]}
+                </b>
             </td>
 
             <td>
-                {s["roll_no"]}
+                {student["roll_no"]}
             </td>
 
             <td>
-                {s["email"] or "-"}
+                {student["email"] or "-"}
             </td>
 
             <td>
-                {s["phone"] or "-"}
+                {student["phone"] or "-"}
             </td>
 
         </tr>
 
         """
+
 
     content = f"""
 
@@ -2001,15 +2721,15 @@ def students():
         </h1>
 
         <p>
-            Registered library students.
+            Manage registered students.
         </p>
 
     </div>
 
 
     <a
-        href="/students/add"
-        class="btn primary">
+        class="btn primary"
+        href="/students/add">
 
         ➕ Add Student
 
@@ -2023,21 +2743,17 @@ def students():
 
         <table>
 
-            <thead>
+            <tr>
 
-                <tr>
-                    <th>ID</th>
-                    <th>Name</th>
-                    <th>Roll No</th>
-                    <th>Email</th>
-                    <th>Phone</th>
-                </tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Roll Number</th>
+                <th>Email</th>
+                <th>Phone</th>
 
-            </thead>
+            </tr>
 
-            <tbody>
-                {rows}
-            </tbody>
+            {rows}
 
         </table>
 
@@ -2045,14 +2761,17 @@ def students():
 
     """
 
-    return page(content)
+    return render_page(content)
 
 
 # =========================================================
 # ADD STUDENT
 # =========================================================
 
-@app.route("/students/add", methods=["GET", "POST"])
+@app.route(
+    "/students/add",
+    methods=["GET", "POST"]
+)
 @login_required
 def add_student():
 
@@ -2060,42 +2779,52 @@ def add_student():
 
         name = request.form["name"]
         roll = request.form["roll"]
-        email = request.form.get("email", "")
-        phone = request.form.get("phone", "")
+        email = request.form["email"]
+        phone = request.form["phone"]
 
-        con = get_db()
+
+        db = get_db()
+
 
         try:
 
-            con.execute(
-                """
+            db.execute("""
                 INSERT INTO students
-                (name,roll_no,email,phone)
-                VALUES(?,?,?,?)
-                """,
                 (
                     name,
-                    roll,
+                    roll_no,
                     email,
                     phone
                 )
-            )
 
-            con.commit()
+                VALUES(?,?,?,?)
+
+            """, (
+                name,
+                roll,
+                email,
+                phone
+            ))
+
+
+            db.commit()
 
             flash(
                 "Student registered successfully!"
             )
 
+
         except sqlite3.IntegrityError:
 
             flash(
-                "Roll number already exists!"
+                "This roll number already exists!"
             )
 
-        con.close()
+
+        db.close()
 
         return redirect("/students")
+
 
     content = """
 
@@ -2105,12 +2834,17 @@ def add_student():
             👨‍🎓 Add Student
         </h1>
 
+        <p>
+            Register a student.
+        </p>
+
     </div>
 
 
     <div class="form-box">
 
         <form method="POST">
+
 
             <div class="form-group">
 
@@ -2120,9 +2854,8 @@ def add_student():
 
                 <input
                     name="name"
-                    required
                     placeholder="Enter student name"
-                >
+                    required>
 
             </div>
 
@@ -2135,9 +2868,8 @@ def add_student():
 
                 <input
                     name="roll"
-                    required
                     placeholder="Enter roll number"
-                >
+                    required>
 
             </div>
 
@@ -2149,10 +2881,9 @@ def add_student():
                 </label>
 
                 <input
-                    name="email"
                     type="email"
-                    placeholder="student@example.com"
-                >
+                    name="email"
+                    placeholder="student@example.com">
 
             </div>
 
@@ -2165,13 +2896,13 @@ def add_student():
 
                 <input
                     name="phone"
-                    placeholder="Enter phone number"
-                >
+                    placeholder="Enter phone number">
 
             </div>
 
 
-            <button class="btn primary">
+            <button
+                class="btn primary">
 
                 👨‍🎓 Register Student
 
@@ -2183,32 +2914,49 @@ def add_student():
 
     """
 
-    return page(content)
+    return render_page(content)
 
 
 # =========================================================
 # ISSUE BOOK
 # =========================================================
 
-@app.route("/issue", methods=["GET", "POST"])
+@app.route(
+    "/issue",
+    methods=["GET", "POST"]
+)
 @login_required
 def issue_book():
 
-    con = get_db()
+    db = get_db()
+
 
     if request.method == "POST":
 
         book_id = request.form["book"]
         student_id = request.form["student"]
 
-        book = con.execute(
+
+        book = db.execute(
             "SELECT * FROM books WHERE id=?",
             (book_id,)
         ).fetchone()
 
-        if not book or book["available"] <= 0:
 
-            con.close()
+        if not book:
+
+            db.close()
+
+            flash(
+                "Book not found!"
+            )
+
+            return redirect("/issue")
+
+
+        if book["available"] <= 0:
+
+            db.close()
 
             flash(
                 "Book is not available!"
@@ -2216,91 +2964,106 @@ def issue_book():
 
             return redirect("/issue")
 
+
         issue_date = datetime.now().strftime(
             "%Y-%m-%d"
         )
 
-        due_date = (
-            datetime.now() +
-            timedelta(days=14)
-        ).strftime("%Y-%m-%d")
 
-        con.execute(
-            """
+        due_date = (
+            datetime.now()
+            + timedelta(days=14)
+        ).strftime(
+            "%Y-%m-%d"
+        )
+
+
+        db.execute("""
             INSERT INTO transactions
-            (book_id,student_id,issue_date,
-             due_date,status)
-            VALUES(?,?,?,?,?)
-            """,
             (
                 book_id,
                 student_id,
                 issue_date,
                 due_date,
-                "Issued"
+                status
             )
-        )
 
-        con.execute(
-            """
+            VALUES(?,?,?,?,?)
+
+        """, (
+            book_id,
+            student_id,
+            issue_date,
+            due_date,
+            "Issued"
+        ))
+
+
+        db.execute("""
             UPDATE books
             SET available=available-1
             WHERE id=?
-            """,
-            (book_id,)
-        )
+        """, (
+            book_id,
+        ))
 
-        con.commit()
-        con.close()
+
+        db.commit()
+        db.close()
+
 
         flash(
-            "📖 Book issued successfully!"
+            "Book issued successfully!"
         )
 
-        return redirect("/dashboard")
+        return redirect("/issue")
 
-    books = con.execute(
-        """
-        SELECT * FROM books
-        WHERE available>0
-        """
-    ).fetchall()
 
-    students = con.execute(
-        "SELECT * FROM students"
-    ).fetchall()
+    books = db.execute("""
+        SELECT *
+        FROM books
+        WHERE available > 0
+        ORDER BY title
+    """).fetchall()
 
-    con.close()
+
+    students = db.execute("""
+        SELECT *
+        FROM students
+        ORDER BY name
+    """).fetchall()
+
+
+    db.close()
+
 
     book_options = ""
 
-    for b in books:
+    for book in books:
 
         book_options += f"""
 
-        <option value="{b["id"]}">
-
-            {b["title"]}
-            — Available: {b["available"]}
-
+        <option value="{book["id"]}">
+            {book["title"]}
+            — Available: {book["available"]}
         </option>
 
         """
+
 
     student_options = ""
 
-    for s in students:
+    for student in students:
 
         student_options += f"""
 
-        <option value="{s["id"]}">
-
-            {s["name"]}
-            — {s["roll_no"]}
-
+        <option value="{student["id"]}">
+            {student["name"]}
+            — {student["roll_no"]}
         </option>
 
         """
+
 
     content = f"""
 
@@ -2321,6 +3084,7 @@ def issue_book():
 
         <form method="POST">
 
+
             <div class="form-group">
 
                 <label>
@@ -2332,7 +3096,7 @@ def issue_book():
                     required>
 
                     <option value="">
-                        Choose book
+                        Select available book
                     </option>
 
                     {book_options}
@@ -2353,7 +3117,7 @@ def issue_book():
                     required>
 
                     <option value="">
-                        Choose student
+                        Select student
                     </option>
 
                     {student_options}
@@ -2371,13 +3135,13 @@ def issue_book():
 
                 <input
                     value="14 Days"
-                    disabled
-                >
+                    disabled>
 
             </div>
 
 
-            <button class="btn primary">
+            <button
+                class="btn primary">
 
                 📖 Issue Book
 
@@ -2389,78 +3153,80 @@ def issue_book():
 
     """
 
-    return page(content)
+    return render_page(content)
 
 
 # =========================================================
-# RETURN PAGE
+# RETURN LIST
 # =========================================================
 
 @app.route("/returns")
 @login_required
 def returns():
 
-    con = get_db()
+    db = get_db()
 
-    data = con.execute(
-        """
+
+    data = db.execute("""
         SELECT
-            t.id,
-            b.title,
-            s.name,
-            s.roll_no,
-            t.issue_date,
-            t.due_date
+            transactions.id,
+            books.title,
+            students.name,
+            students.roll_no,
+            transactions.issue_date,
+            transactions.due_date
 
-        FROM transactions t
+        FROM transactions
 
-        JOIN books b
-            ON t.book_id=b.id
+        JOIN books
+        ON transactions.book_id=books.id
 
-        JOIN students s
-            ON t.student_id=s.id
+        JOIN students
+        ON transactions.student_id=students.id
 
-        WHERE t.status='Issued'
+        WHERE transactions.status='Issued'
 
-        ORDER BY t.id DESC
-        """
-    ).fetchall()
+        ORDER BY transactions.id DESC
 
-    con.close()
+    """).fetchall()
+
+
+    db.close()
+
 
     rows = ""
 
-    for x in data:
+    for item in data:
 
         rows += f"""
 
         <tr>
 
             <td>
-                <b>{x["title"]}</b>
+                {item["title"]}
             </td>
 
             <td>
-                {x["name"]}
+                {item["name"]}
             </td>
 
             <td>
-                {x["roll_no"]}
+                {item["roll_no"]}
             </td>
 
             <td>
-                {x["issue_date"]}
+                {item["issue_date"]}
             </td>
 
             <td>
-                {x["due_date"]}
+                {item["due_date"]}
             </td>
 
             <td>
 
                 <a
-                    href="/return/{x["id"]}"
-                    class="btn success">
+                    class="btn success"
+                    href="/return/{item["id"]}">
 
                     ↩️ Return
 
@@ -2472,6 +3238,7 @@ def returns():
 
         """
 
+
     content = f"""
 
     <div class="page-title">
@@ -2481,7 +3248,7 @@ def returns():
         </h1>
 
         <p>
-            Books currently issued.
+            Currently issued books.
         </p>
 
     </div>
@@ -2491,22 +3258,18 @@ def returns():
 
         <table>
 
-            <thead>
+            <tr>
 
-                <tr>
-                    <th>Book</th>
-                    <th>Student</th>
-                    <th>Roll</th>
-                    <th>Issue</th>
-                    <th>Due</th>
-                    <th>Action</th>
-                </tr>
+                <th>Book</th>
+                <th>Student</th>
+                <th>Roll No</th>
+                <th>Issue Date</th>
+                <th>Due Date</th>
+                <th>Action</th>
 
-            </thead>
+            </tr>
 
-            <tbody>
-                {rows}
-            </tbody>
+            {rows}
 
         </table>
 
@@ -2514,28 +3277,31 @@ def returns():
 
     """
 
-    return page(content)
+    return render_page(content)
 
 
 # =========================================================
 # RETURN BOOK
 # =========================================================
 
-@app.route("/return/<int:id>")
+@app.route(
+    "/return/<int:id>"
+)
 @login_required
 def return_book(id):
 
-    con = get_db()
+    db = get_db()
 
-    transaction = con.execute(
-        """
+
+    transaction = db.execute("""
         SELECT book_id
         FROM transactions
         WHERE id=?
         AND status='Issued'
-        """,
-        (id,)
-    ).fetchone()
+    """, (
+        id,
+    )).fetchone()
+
 
     if transaction:
 
@@ -2543,34 +3309,43 @@ def return_book(id):
             "%Y-%m-%d"
         )
 
-        con.execute(
-            """
+
+        db.execute("""
             UPDATE transactions
 
             SET return_date=?,
                 status='Returned'
 
             WHERE id=?
-            """,
-            (return_date, id)
-        )
 
-        con.execute(
-            """
+        """, (
+            return_date,
+            id
+        ))
+
+
+        db.execute("""
             UPDATE books
-            SET available=available+1
-            WHERE id=?
-            """,
-            (transaction["book_id"],)
-        )
 
-        con.commit()
+            SET available=available+1
+
+            WHERE id=?
+
+        """, (
+            transaction["book_id"],
+        ))
+
+
+        db.commit()
+
 
         flash(
-            "↩️ Book returned successfully!"
+            "Book returned successfully!"
         )
 
-    con.close()
+
+    db.close()
+
 
     return redirect("/returns")
 
@@ -2583,87 +3358,87 @@ def return_book(id):
 @login_required
 def history():
 
-    con = get_db()
+    db = get_db()
 
-    data = con.execute(
-        """
+
+    data = db.execute("""
         SELECT
-            t.*,
-            b.title,
-            s.name,
-            s.roll_no
+            transactions.*,
+            books.title,
+            students.name,
+            students.roll_no
 
-        FROM transactions t
+        FROM transactions
 
-        JOIN books b
-            ON t.book_id=b.id
+        JOIN books
+        ON transactions.book_id=books.id
 
-        JOIN students s
-            ON t.student_id=s.id
+        JOIN students
+        ON transactions.student_id=students.id
 
-        ORDER BY t.id DESC
-        """
-    ).fetchall()
+        ORDER BY transactions.id DESC
 
-    con.close()
+    """).fetchall()
+
+
+    db.close()
+
 
     rows = ""
 
-    for x in data:
+    for item in data:
 
-        if x["status"] == "Returned":
+        if item["status"] == "Returned":
 
             status = """
-            <span class="btn success">
-                ✓ Returned
-            </span>
+                <span class="btn success">
+                    Returned
+                </span>
             """
 
         else:
 
             status = """
-            <span
-                class="btn"
+                <span class="btn"
                 style="
                     background:#dbeafe;
                     color:#1d4ed8;
                 ">
-
-                ● Issued
-
-            </span>
+                    Issued
+                </span>
             """
+
 
         rows += f"""
 
         <tr>
 
             <td>
-                #{x["id"]}
+                #{item["id"]}
             </td>
 
             <td>
-                <b>{x["title"]}</b>
+                {item["title"]}
             </td>
 
             <td>
-                {x["name"]}
+                {item["name"]}
             </td>
 
             <td>
-                {x["roll_no"]}
+                {item["roll_no"]}
             </td>
 
             <td>
-                {x["issue_date"]}
+                {item["issue_date"]}
             </td>
 
             <td>
-                {x["due_date"]}
+                {item["due_date"]}
             </td>
 
             <td>
-                {x["return_date"] or "-"}
+                {item["return_date"] or "-"}
             </td>
 
             <td>
@@ -2674,16 +3449,17 @@ def history():
 
         """
 
+
     content = f"""
 
     <div class="page-title">
 
         <h1>
-            📋 History
+            📋 Transaction History
         </h1>
 
         <p>
-            Complete library transaction history.
+            Complete issue and return history.
         </p>
 
     </div>
@@ -2693,24 +3469,20 @@ def history():
 
         <table>
 
-            <thead>
+            <tr>
 
-                <tr>
-                    <th>ID</th>
-                    <th>Book</th>
-                    <th>Student</th>
-                    <th>Roll</th>
-                    <th>Issue</th>
-                    <th>Due</th>
-                    <th>Return</th>
-                    <th>Status</th>
-                </tr>
+                <th>ID</th>
+                <th>Book</th>
+                <th>Student</th>
+                <th>Roll No</th>
+                <th>Issue</th>
+                <th>Due</th>
+                <th>Return</th>
+                <th>Status</th>
 
-            </thead>
+            </tr>
 
-            <tbody>
-                {rows}
-            </tbody>
+            {rows}
 
         </table>
 
@@ -2718,7 +3490,7 @@ def history():
 
     """
 
-    return page(content)
+    return render_page(content)
 
 
 # =========================================================
@@ -2734,103 +3506,69 @@ def scan():
     <div class="page-title">
 
         <h1>
-            📷 QR Book Scanner
+            📷 QR Scanner
         </h1>
 
         <p>
-            Scan a book QR code using your
-            laptop webcam.
+            Scan a book QR code using your laptop webcam.
         </p>
 
     </div>
 
 
-    <div class="scanner-box">
+    <div class="scanner">
 
-        <h2>
-            Scan QR Code
-        </h2>
+        <h3>
+            Scan Book QR Code
+        </h3>
 
         <p style="
             color:#64748b;
             margin-top:7px;
+            font-size:13px;
         ">
 
-            Place the QR code inside
-            the scanning area.
+            Allow camera permission
+            when the browser asks.
 
         </p>
 
-        <br>
 
-
-        <div class="qr-frame">
-
-            <div class="corner c1"></div>
-            <div class="corner c2"></div>
-            <div class="corner c3"></div>
-            <div class="corner c4"></div>
-
-            <div id="reader"></div>
-
-        </div>
-
-
-        <p style="
-            margin-top:15px;
-            color:#64748b;
-        ">
-
-            🟢 Scanner active...
-
-        </p>
+        <div id="reader"></div>
 
     </div>
 
 
     <script src="
-        https://unpkg.com/html5-qrcode
-    "></script>
+    https://unpkg.com/html5-qrcode">
+    </script>
 
 
     <script>
 
-    function onScanSuccess(decodedText){
+    function onScanSuccess(decodedText, decodedResult)
+    {
 
-        if(
-            decodedText.startsWith(
-                "http://127.0.0.1:5000/book/"
-            )
-        ){
-
-            window.location.href =
-                decodedText;
-
-        }else{
-
-            alert(
-                "This QR code is not a library book QR code."
-            );
-
-        }
+        window.location.href =
+        decodedText;
 
     }
 
 
-    function onScanFailure(error){
-        // Scanner keeps searching
+    function onScanFailure(error)
+    {
+        // Continue scanning
     }
 
 
     const scanner =
-        new Html5QrcodeScanner(
-            "reader",
-            {
-                fps:10,
-                qrbox:250
-            },
-            false
-        );
+    new Html5QrcodeScanner(
+        "reader",
+        {
+            fps: 10,
+            qrbox: 250
+        }
+    );
 
 
     scanner.render(
@@ -2842,158 +3580,141 @@ def scan():
 
     """
 
-    return page(content)
+    return render_page(content)
 
 
 # =========================================================
-# QR BOOK DETAILS
+# BOOK DETAILS FROM QR
 # =========================================================
 
-@app.route("/book/<int:id>")
+@app.route(
+    "/book/<int:id>"
+)
 def book_details(id):
 
-    con = get_db()
+    db = get_db()
 
-    book = con.execute(
+
+    book = db.execute(
         "SELECT * FROM books WHERE id=?",
         (id,)
     ).fetchone()
 
-    con.close()
+
+    db.close()
+
 
     if not book:
 
         return """
-        <h1 style="
+
+        <div style="
+            padding:60px;
             text-align:center;
-            margin-top:100px;
+            font-family:Arial;
         ">
-            ❌ Book Not Found
-        </h1>
+
+            <h1>
+                ❌ Book Not Found
+            </h1>
+
+        </div>
+
         """
+
 
     if book["available"] > 0:
 
         status = """
+
         <span class="btn success">
-            🟢 Available
+            ✅ Available
         </span>
+
         """
 
     else:
 
         status = """
+
         <span class="btn danger">
-            🔴 Not Available
+            ❌ Not Available
         </span>
+
         """
+
 
     content = f"""
 
     <div class="page-title">
 
         <h1>
-            📚 QR Book Information
+            📚 Book Details
         </h1>
-
-        <p>
-            Book information retrieved
-            from QR code.
-        </p>
 
     </div>
 
 
-    <div
-        class="form-box"
-        style="
-            max-width:650px;
-            text-align:center;
-        "
-    >
+    <div class="book-card">
 
-        <img
-            class="qr-image"
-            style="
-                width:180px;
-                height:180px;
-                animation:qrAppear .8s ease;
-            "
-            src="/static/qr/{book["qr_code"]}"
-        >
-
-
-        <h2 style="margin:25px 0">
-
+        <h2>
             {book["title"]}
-
         </h2>
 
 
-        <p style="
-            margin:13px 0;
-            text-align:left;
-        ">
+        <div class="book-row">
 
-            <b>Book ID:</b>
-            #{book["id"]}
+            <b>
+                Author:
+            </b>
 
-        </p>
-
-
-        <p style="
-            margin:13px 0;
-            text-align:left;
-        ">
-
-            <b>Author:</b>
             {book["author"]}
 
-        </p>
+        </div>
 
 
-        <p style="
-            margin:13px 0;
-            text-align:left;
-        ">
+        <div class="book-row">
 
-            <b>Category:</b>
+            <b>
+                Category:
+            </b>
+
             {book["category"] or "-"}
 
-        </p>
+        </div>
 
 
-        <p style="
-            margin:13px 0;
-            text-align:left;
-        ">
+        <div class="book-row">
 
-            <b>ISBN:</b>
+            <b>
+                ISBN:
+            </b>
+
             {book["isbn"] or "-"}
 
-        </p>
+        </div>
 
 
-        <p style="
-            margin:13px 0;
-            text-align:left;
-        ">
+        <div class="book-row">
 
-            <b>Total Copies:</b>
+            <b>
+                Total Quantity:
+            </b>
+
             {book["quantity"]}
 
-        </p>
+        </div>
 
 
-        <p style="
-            margin:13px 0;
-            text-align:left;
-        ">
+        <div class="book-row">
 
-            <b>Available Copies:</b>
+            <b>
+                Available:
+            </b>
+
             {book["available"]}
 
-        </p>
+        </div>
 
 
         <br>
@@ -3002,32 +3723,9 @@ def book_details(id):
 
     </div>
 
-
-    <style>
-
-    @keyframes qrAppear{{
-
-        from{{
-            opacity:0;
-            transform:
-                scale(0.4)
-                rotate(-10deg);
-        }}
-
-        to py{{
-            opacity:1;
-            transform:
-                scale(1)
-                rotate(0);
-        }}
-
-    }}
-
-    </style>
-
     """
 
-    return page(content)
+    return render_page(content)
 
 
 # =========================================================
@@ -3039,14 +3737,17 @@ if __name__ == "__main__":
     init_db()
 
     print()
-    print("==========================================")
-    print("      QR LIBRARY MANAGEMENT SYSTEM")
-    print("==========================================")
+    print("==============================================")
+    print("       QR LIBRARY MANAGEMENT SYSTEM")
+    print("==============================================")
+    print()
     print("Username : admin")
     print("Password : admin123")
-    print("Website  : http://127.0.0.1:5000")
-    print("==========================================")
     print()
+    print("Open Browser:")
+    print("http://127.0.0.1:5000")
+    print()
+    print("==============================================")
 
     app.run(
         host="127.0.0.1",
